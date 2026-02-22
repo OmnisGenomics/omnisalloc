@@ -12,11 +12,19 @@
 extern JEMALLOC_TSD_TYPE_ATTR(tsd_t) tsd_tls;
 extern pthread_key_t tsd_tsd;
 extern bool tsd_booted;
+/* True while pthread TSD destructor callbacks are running on this thread. */
+extern JEMALLOC_TSD_TYPE_ATTR(bool) tsd_cleanup_in_progress;
+
+static inline void
+tsd_cleanup_wrapper(void *arg) {
+	tsd_cleanup_in_progress = true;
+	tsd_cleanup(arg);
+}
 
 /* Initialization/cleanup. */
 JEMALLOC_ALWAYS_INLINE bool
 tsd_boot0(void) {
-	if (pthread_key_create(&tsd_tsd, &tsd_cleanup) != 0) {
+	if (pthread_key_create(&tsd_tsd, &tsd_cleanup_wrapper) != 0) {
 		return true;
 	}
 	tsd_booted = true;

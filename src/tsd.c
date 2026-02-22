@@ -21,6 +21,8 @@ bool tsd_booted = false;
 JEMALLOC_TSD_TYPE_ATTR(tsd_t) tsd_tls = TSD_INITIALIZER;
 pthread_key_t tsd_tsd;
 bool tsd_booted = false;
+/* Per-thread marker for destructor callback teardown context. */
+JEMALLOC_TSD_TYPE_ATTR(bool) tsd_cleanup_in_progress = false;
 #elif (defined(_WIN32))
 #if defined(JEMALLOC_LEGACY_WINDOWS_SUPPORT) || !defined(_MSC_VER)
 DWORD tsd_tsd;
@@ -300,6 +302,14 @@ tsd_fetch_slow(tsd_t *tsd, bool minimal) {
 	} else if (tsd_state_get(tsd) == tsd_state_uninitialized) {
 		if (!minimal) {
 			if (tsd_booted) {
+#if defined(JEMALLOC_TLS)
+				if (unlikely(tsd_cleanup_in_progress)) {
+					tsd_state_set(tsd, tsd_state_reincarnated);
+					tsd_set(tsd);
+					tsd_data_init_nocleanup(tsd);
+					return tsd;
+				}
+#endif
 				tsd_state_set(tsd, tsd_state_nominal);
 				tsd_slow_update(tsd);
 				/* Trigger cleanup handler registration. */
@@ -313,6 +323,12 @@ tsd_fetch_slow(tsd_t *tsd, bool minimal) {
 			*tsd_min_init_state_nfetchedp_get(tsd) = 1;
 		}
 	} else if (tsd_state_get(tsd) == tsd_state_minimal_initialized) {
+#if defined(JEMALLOC_TLS)
+		if (unlikely(tsd_cleanup_in_progress)) {
+			assert_tsd_data_cleanup_done(tsd);
+			return tsd;
+		}
+#endif
 		/*
 		 * If a thread only ever deallocates (e.g. dedicated reclamation
 		 * threads), we want to help it to eventually escape the slow

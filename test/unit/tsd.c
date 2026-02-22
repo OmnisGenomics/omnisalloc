@@ -136,6 +136,45 @@ TEST_BEGIN(test_tsd_reincarnation) {
 }
 TEST_END
 
+#if defined(JEMALLOC_TLS)
+extern JEMALLOC_TSD_TYPE_ATTR(bool) tsd_cleanup_in_progress;
+
+static void *
+thd_start_late_cleanup_alloc_no_nominal(void *arg) {
+	(void)arg;
+
+	tsd_t *tsd = tsd_fetch();
+	expect_true(tsd_nominal(tsd), "TSD should start nominal");
+
+	/*
+	 * Simulate late-thread-exit allocations after destructor rounds
+	 * exhausted: cleanup has started, but the state appears uninitialized.
+	 */
+	tsd_cleanup((void *)tsd);
+	expect_u_eq(tsd_state_get(tsd), tsd_state_purgatory,
+	    "TSD should be in purgatory after cleanup");
+	tsd_state_set(tsd, tsd_state_uninitialized);
+	tsd_cleanup_in_progress = true;
+
+	tsd = tsd_fetch();
+	expect_u_eq(tsd_state_get(tsd), tsd_state_reincarnated,
+	    "TSD should stay no-cleanup during teardown");
+	expect_false(tsd_nominal(tsd), "TSD should not re-enter nominal state");
+	expect_ptr_null(*tsd_arenap_get_unsafe(tsd),
+	    "Reincarnated TSD should not own an arena");
+
+	tsd_cleanup_in_progress = false;
+	return NULL;
+}
+
+TEST_BEGIN(test_tsd_late_cleanup_alloc_no_nominal) {
+	thd_t thd;
+	thd_create(&thd, thd_start_late_cleanup_alloc_no_nominal, NULL);
+	thd_join(thd, NULL);
+}
+TEST_END
+#endif
+
 static void *
 thd_start_dalloc_only(void *arg) {
 	void **ptrs = (void **)arg;
@@ -326,5 +365,8 @@ main(void) {
 	    test_tsd_sub_thread,
 	    test_tsd_sub_thread_dalloc_only,
 	    test_tsd_reincarnation,
+#if defined(JEMALLOC_TLS)
+	    test_tsd_late_cleanup_alloc_no_nominal,
+#endif
 	    test_tsd_global_slow);
 }
