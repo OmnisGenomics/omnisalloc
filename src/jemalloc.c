@@ -2610,10 +2610,17 @@ imalloc_body(static_opts_t *sopts, dynamic_opts_t *dopts, tsd_t *tsd) {
 		 */
 		assert(dopts->tcache_ind == TCACHE_IND_AUTOMATIC ||
 		    dopts->tcache_ind == TCACHE_IND_NONE);
-		assert(dopts->arena_ind == ARENA_IND_AUTOMATIC);
 		dopts->tcache_ind = TCACHE_IND_NONE;
-		/* We know that arena 0 has already been initialized. */
-		dopts->arena_ind = 0;
+		/*
+		 * Keep explicit arena choices when they are already initialized.
+		 * During thread teardown, callers may still perform mallocx() with
+		 * MALLOCX_ARENA(...).  For anything else, fall back to arena 0,
+		 * which is guaranteed to be initialized.
+		 */
+		if (dopts->arena_ind == ARENA_IND_AUTOMATIC ||
+		    arena_get(tsd_tsdn(tsd), dopts->arena_ind, false) == NULL) {
+			dopts->arena_ind = 0;
+		}
 	}
 
 	/*
