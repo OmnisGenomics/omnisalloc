@@ -76,6 +76,8 @@ bool	opt_abort_conf =
     ;
 /* Intentionally default off, even with debug builds. */
 bool	opt_confirm_conf = false;
+/* Suppress warning messages for invalid / unsupported runtime conf values. */
+bool	opt_suppress_conf_warnings = false;
 const char	*opt_junk =
 #if (defined(JEMALLOC_DEBUG) && defined(JEMALLOC_FILL))
     "true"
@@ -939,8 +941,10 @@ malloc_abort_invalid_conf(void) {
 static void
 malloc_conf_error(const char *msg, const char *k, size_t klen, const char *v,
     size_t vlen) {
-	malloc_printf("<jemalloc>: %s: %.*s:%.*s\n", msg, (int)klen, k,
-	    (int)vlen, v);
+	if (!opt_suppress_conf_warnings) {
+		malloc_printf("<jemalloc>: %s: %.*s:%.*s\n", msg, (int)klen, k,
+		    (int)vlen, v);
+	}
 	/* If abort_conf is set, error out after processing all options. */
 	const char *experimental = "experimental_";
 	if (strncmp(k, experimental, strlen(experimental)) == 0) {
@@ -1236,6 +1240,8 @@ malloc_conf_init_helper(sc_data_t *sc_data, unsigned bin_shard_sizes[SC_NBINS],
 			bool cur_opt_valid = true;
 
 			CONF_HANDLE_BOOL(opt_confirm_conf, "confirm_conf")
+			CONF_HANDLE_BOOL(opt_suppress_conf_warnings,
+			    "suppress_conf_warnings")
 			if (initial_call) {
 				continue;
 			}

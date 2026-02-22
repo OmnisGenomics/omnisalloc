@@ -798,9 +798,11 @@ background_thread_ctl_init(tsdn_t *tsdn) {
 bool
 background_thread_boot0(void) {
 	if (!have_background_thread && opt_background_thread) {
-		malloc_printf("<jemalloc>: option background_thread currently "
-		    "supports pthread only\n");
-		return true;
+		if (!opt_suppress_conf_warnings) {
+			malloc_printf("<jemalloc>: option background_thread "
+			    "currently supports pthread only\n");
+		}
+		opt_background_thread = false;
 	}
 #ifdef JEMALLOC_PTHREAD_CREATE_WRAPPER
 	if ((config_lazy_lock || opt_background_thread) &&

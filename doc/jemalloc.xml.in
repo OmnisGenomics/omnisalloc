@@ -973,6 +973,19 @@ mallctl("arena." STRINGIFY(MALLCTL_ARENAS_ALL) ".decay",
 	option is disabled by default.</para></listitem>
       </varlistentry>
 
+      <varlistentry id="opt.suppress_conf_warnings">
+        <term>
+          <mallctl>opt.suppress_conf_warnings</mallctl>
+          (<type>bool</type>)
+          <literal>r-</literal>
+        </term>
+	<listitem><para>Suppress warning messages for invalid and unsupported
+	runtime configuration values.  If true, option parsing continues with
+	the same fallback behavior, but warning lines are not written to
+	<filename>stderr</filename>.  This option is disabled by
+	default.</para></listitem>
+      </varlistentry>
+
       <varlistentry id="opt.abort_conf">
         <term>
           <mallctl>opt.abort_conf</mallctl>
