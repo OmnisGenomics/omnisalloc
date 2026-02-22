@@ -1856,25 +1856,11 @@ arena_create_huge_arena(tsd_t *tsd, unsigned ind) {
 	huge_arena->name[ARENA_NAME_LEN - 1] = '\0';
 
 	/*
-	 * Purge eagerly for huge allocations, because: 1) number of huge
-	 * allocations is usually small, which means ticker based decay is not
-	 * reliable; and 2) less immediate reuse is expected for huge
-	 * allocations.
-	 *
-	 * However, with background threads enabled, keep normal purging since
-	 * the purging delay is bounded.
+	 * Keep decay settings configured by the user for the dedicated oversize
+	 * arena.  When decay settings allow eager reclamation for oversized
+	 * extents, that is handled by the extent-recording path, which avoids
+	 * routing all deferred purging through a single foreground thread.
 	 */
-	if (!background_thread_enabled()
-	    && arena_dirty_decay_ms_default_get() > 0) {
-		arena_decay_ms_set(tsd_tsdn(tsd), huge_arena,
-		    extent_state_dirty, 0);
-	}
-	if (!background_thread_enabled()
-	    &&arena_muzzy_decay_ms_default_get() > 0) {
-		arena_decay_ms_set(tsd_tsdn(tsd), huge_arena,
-		    extent_state_muzzy, 0);
-	}
-
 	return huge_arena;
 }
 

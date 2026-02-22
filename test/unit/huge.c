@@ -1,10 +1,46 @@
 #include "test/jemalloc_test.h"
 
 /* Threshold: 2 << 20 = 2097152. */
-const char *malloc_conf = "oversize_threshold:2097152";
+#define HUGE_DIRTY_DECAY_MS 500
+#define HUGE_MUZZY_DECAY_MS -1
+const char *malloc_conf =
+    "oversize_threshold:2097152,dirty_decay_ms:500,muzzy_decay_ms:-1,"
+    "background_thread:false";
 
 #define HUGE_SZ (2 << 20)
 #define SMALL_SZ (8)
+
+static ssize_t
+arena_decay_ms_read_ctl(unsigned arena, const char *state) {
+	char cmd[64];
+	ssize_t decay_ms;
+	size_t decay_sz = sizeof(decay_ms);
+
+	malloc_snprintf(cmd, sizeof(cmd), "arena.%u.%s_decay_ms", arena, state);
+	expect_d_eq(mallctl(cmd, &decay_ms, &decay_sz, NULL, 0), 0,
+	    "Unexpected mallctl() failure: %s", cmd);
+	return decay_ms;
+}
+
+TEST_BEGIN(huge_decay_configuration) {
+	unsigned arena;
+	size_t arena_sz = sizeof(arena);
+
+	void *ptr = mallocx(HUGE_SZ, 0);
+	expect_ptr_not_null(ptr, "Fail to allocate huge size");
+	expect_d_eq(mallctl("arenas.lookup", &arena, &arena_sz, &ptr,
+	    sizeof(ptr)), 0, "Unexpected mallctl() failure");
+	expect_u_gt(arena, 0, "Huge allocation should not come from arena 0");
+
+	expect_zd_eq(arena_decay_ms_read_ctl(arena, "dirty"),
+	    HUGE_DIRTY_DECAY_MS,
+	    "Huge arena dirty_decay_ms should follow configured default");
+	expect_zd_eq(arena_decay_ms_read_ctl(arena, "muzzy"),
+	    HUGE_MUZZY_DECAY_MS,
+	    "Huge arena muzzy_decay_ms should follow configured default");
+	dallocx(ptr, 0);
+}
+TEST_END
 
 TEST_BEGIN(huge_bind_thread) {
 	unsigned arena1, arena2;
@@ -105,6 +141,7 @@ TEST_END
 int
 main(void) {
 	return test(
+	    huge_decay_configuration,
 	    huge_allocation,
 	    huge_mallocx,
 	    huge_bind_thread);
