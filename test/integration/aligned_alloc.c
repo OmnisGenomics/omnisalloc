@@ -3,6 +3,20 @@
 #define MAXALIGN (((size_t)1) << 23)
 
 /*
+ * Keep aligned_alloc calls observable for compilers that perform malloc DCE
+ * when the result is only compared or freed.
+ */
+static void *volatile aligned_alloc_sink;
+static void *(*volatile aligned_alloc_call)(size_t, size_t) = aligned_alloc;
+
+static JEMALLOC_NOINLINE void *
+aligned_alloc_test_call(size_t alignment, size_t size) {
+	void *ret = aligned_alloc_call(alignment, size);
+	aligned_alloc_sink = ret;
+	return ret;
+}
+
+/*
  * On systems which can't merge extents, tests that call this function generate
  * a lot of dirty memory very quickly.  Purging between cycles mitigates
  * potential OOM on e.g. 32-bit Windows.
@@ -19,14 +33,14 @@ TEST_BEGIN(test_alignment_errors) {
 
 	alignment = 0;
 	set_errno(0);
-	p = aligned_alloc(alignment, 1);
+	p = aligned_alloc_test_call(alignment, 1);
 	expect_false(p != NULL || get_errno() != EINVAL,
 	    "Expected error for invalid alignment %zu", alignment);
 
 	for (alignment = sizeof(size_t); alignment < MAXALIGN;
 	    alignment <<= 1) {
 		set_errno(0);
-		p = aligned_alloc(alignment + 1, 1);
+		p = aligned_alloc_test_call(alignment + 1, 1);
 		expect_false(p != NULL || get_errno() != EINVAL,
 		    "Expected error for invalid alignment %zu",
 		    alignment + 1);
@@ -57,7 +71,7 @@ TEST_BEGIN(test_oom_errors) {
 	size      = 0x80000000LU;
 #endif
 	set_errno(0);
-	p = aligned_alloc(alignment, size);
+	p = aligned_alloc_test_call(alignment, size);
 	expect_false(p != NULL || get_errno() != ENOMEM,
 	    "Expected error for aligned_alloc(%zu, %zu)",
 	    alignment, size);
@@ -70,7 +84,7 @@ TEST_BEGIN(test_oom_errors) {
 	size      = 0xc0000001LU;
 #endif
 	set_errno(0);
-	p = aligned_alloc(alignment, size);
+	p = aligned_alloc_test_call(alignment, size);
 	expect_false(p != NULL || get_errno() != ENOMEM,
 	    "Expected error for aligned_alloc(%zu, %zu)",
 	    alignment, size);
@@ -82,7 +96,7 @@ TEST_BEGIN(test_oom_errors) {
 	size = 0xfffffff0LU;
 #endif
 	set_errno(0);
-	p = aligned_alloc(alignment, size);
+	p = aligned_alloc_test_call(alignment, size);
 	expect_false(p != NULL || get_errno() != ENOMEM,
 	    "Expected error for aligned_alloc(&p, %zu, %zu)",
 	    alignment, size);
