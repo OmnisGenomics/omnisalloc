@@ -154,6 +154,12 @@ phn_merge(void *phn0, void *phn1, size_t offset, ph_cmp_t cmp) {
 		result = phn1;
 	} else if (phn1 == NULL) {
 		result = phn0;
+	} else if (unlikely(phn0 == phn1)) {
+		/*
+		 * Defensive against heap list corruption.  Merging a node with
+		 * itself can create cycles and hang callers while holding locks.
+		 */
+		result = phn0;
 	} else if (cmp(phn0, phn1) < 0) {
 		phn_merge_ordered(phn0, phn1, offset, cmp);
 		result = phn0;
@@ -171,6 +177,16 @@ phn_merge_siblings(void *phn, size_t offset, ph_cmp_t cmp) {
 	void *tail = NULL;
 	void *phn0 = phn;
 	void *phn1 = phn_next_get(phn0, offset);
+
+	if (unlikely(phn1 == phn0)) {
+		/*
+		 * Defensive against a self-referential sibling link, which would
+		 * otherwise cause pathological merge behavior.
+		 */
+		phn_prev_set(phn0, NULL, offset);
+		phn_next_set(phn0, NULL, offset);
+		return phn0;
+	}
 
 	if (phn1 == NULL) {
 		return phn0;
@@ -197,6 +213,11 @@ phn_merge_siblings(void *phn, size_t offset, ph_cmp_t cmp) {
 	phn0 = phnrest;
 	while (phn0 != NULL) {
 		phn1 = phn_next_get(phn0, offset);
+		if (unlikely(phn1 == phn0)) {
+			phn_prev_set(phn0, NULL, offset);
+			phn_next_set(phn0, NULL, offset);
+			phn1 = NULL;
+		}
 		if (phn1 != NULL) {
 			phnrest = phn_next_get(phn1, offset);
 			if (phnrest != NULL) {
@@ -222,6 +243,11 @@ phn_merge_siblings(void *phn, size_t offset, ph_cmp_t cmp) {
 	phn1 = phn_next_get(phn0, offset);
 	if (phn1 != NULL) {
 		while (true) {
+			if (unlikely(phn1 == phn0)) {
+				phn_prev_set(phn0, NULL, offset);
+				phn_next_set(phn0, NULL, offset);
+				break;
+			}
 			head = phn_next_get(phn1, offset);
 			assert(phn_prev_get(phn0, offset) == NULL);
 			phn_next_set(phn0, NULL, offset);
@@ -251,6 +277,9 @@ ph_merge_aux(ph_t *ph, size_t offset, ph_cmp_t cmp) {
 		phn_next_set(ph->root, NULL, offset);
 		phn_prev_set(phn, NULL, offset);
 		phn = phn_merge_siblings(phn, offset, cmp);
+		if (unlikely(phn == ph->root)) {
+			return;
+		}
 		assert(phn_next_get(phn, offset) == NULL);
 		phn_merge_ordered(ph->root, phn, offset, cmp);
 	}

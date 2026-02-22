@@ -339,9 +339,34 @@ TEST_BEGIN(test_ph_random) {
 }
 TEST_END
 
+TEST_BEGIN(test_ph_self_referential_aux) {
+	heap_t heap;
+	node_t node;
+
+	heap_new(&heap);
+	node.magic = NODE_MAGIC;
+	node.key = 1;
+
+	heap_insert(&heap, &node);
+	expect_ptr_not_null(heap_first(&heap), "Heap should not be empty");
+
+	/*
+	 * Simulate a corrupted aux-list self-link.  This used to be able to
+	 * trigger pathological merge behavior.
+	 */
+	phn_prev_set(&node, &node, offsetof(node_t, link));
+	phn_next_set(&node, &node, offsetof(node_t, link));
+
+	node_t *removed = heap_remove_first(&heap);
+	expect_ptr_eq(removed, &node, "Unexpected node removed");
+	expect_true(heap_empty(&heap), "Heap should be empty");
+}
+TEST_END
+
 int
 main(void) {
 	return test(
 	    test_ph_empty,
-	    test_ph_random);
+	    test_ph_random,
+	    test_ph_self_referential_aux);
 }
