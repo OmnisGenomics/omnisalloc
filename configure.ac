@@ -767,6 +767,13 @@ case "${host}" in
   *-*-linux-musl*)
 	dnl syscall(2) and secure_getenv(3) are exposed by _GNU_SOURCE.
 	JE_APPEND_VS(CPPFLAGS, -D_GNU_SOURCE)
+	dnl aarch64 toolchains that rely on out-of-line atomics may pull in
+	dnl libgcc startup helpers that reference __getauxval, which is not
+	dnl available in some musl environments.  Prefer inlined LL/SC atomics.
+	if test "x${host_cpu}" = "xaarch64" ; then
+	  JE_CFLAGS_ADD([-mno-outline-atomics])
+	  JE_CXXFLAGS_ADD([-mno-outline-atomics])
+	fi
 	abi="elf"
 	AC_DEFINE([JEMALLOC_PURGE_MADVISE_DONTNEED_ZEROS], [ ], [ ])
 	AC_DEFINE([JEMALLOC_HAS_ALLOCA_H], [ ], [ ])
