@@ -230,6 +230,65 @@ TEST_BEGIN(test_extent_auto_hook) {
 }
 TEST_END
 
+TEST_BEGIN(test_extent_split_failure_calls_dalloc) {
+	unsigned arena_ind;
+	size_t old_size, new_size, sz;
+	size_t hooks_mib[3];
+	size_t hooks_miblen;
+	extent_hooks_t *new_hooks, *old_hooks;
+	bool retain;
+	size_t retain_sz = sizeof(retain);
+
+	expect_d_eq(mallctl("opt.retain", (void *)&retain, &retain_sz, NULL, 0),
+	    0, "Unexpected mallctl() failure");
+	test_skip_if(!retain);
+
+	extent_hooks_prep();
+
+	sz = sizeof(unsigned);
+	expect_d_eq(mallctl("arenas.create", (void *)&arena_ind, &sz, NULL, 0),
+	    0, "Unexpected mallctl() failure");
+
+	/* Install custom extent hooks. */
+	hooks_miblen = sizeof(hooks_mib) / sizeof(size_t);
+	expect_d_eq(mallctlnametomib("arena.0.extent_hooks", hooks_mib,
+	    &hooks_miblen), 0, "Unexpected mallctlnametomib() failure");
+	hooks_mib[1] = (size_t)arena_ind;
+	old_size = sizeof(extent_hooks_t *);
+	new_hooks = &hooks;
+	new_size = sizeof(extent_hooks_t *);
+	expect_d_eq(mallctlbymib(hooks_mib, hooks_miblen, (void *)&old_hooks,
+	    &old_size, (void *)&new_hooks, new_size), 0,
+	    "Unexpected extent_hooks error");
+
+	try_alloc = true;
+	try_dalloc = true;
+	try_destroy = true;
+	try_commit = true;
+	try_decommit = true;
+	try_purge_lazy = true;
+	try_purge_forced = true;
+	try_split = false;
+	try_merge = true;
+
+	called_split = false;
+	called_dalloc = false;
+
+	int flags = MALLOCX_ARENA(arena_ind) | MALLOCX_TCACHE_NONE;
+	void *p = mallocx(64, flags);
+	expect_ptr_not_null(p, "Unexpected mallocx() error");
+	expect_true(called_split, "Expected split call");
+	expect_true(called_dalloc, "Expected dalloc call for split failure cleanup");
+	dallocx(p, flags);
+
+	try_split = true;
+
+	/* Restore extent hooks. */
+	expect_d_eq(mallctlbymib(hooks_mib, hooks_miblen, NULL, NULL,
+	    (void *)&old_hooks, new_size), 0, "Unexpected extent_hooks error");
+}
+TEST_END
+
 static void
 test_arenas_create_ext_base(arena_config_t config,
 	bool expect_hook_data, bool expect_hook_metadata)
@@ -282,6 +341,7 @@ main(void) {
 	return test(
 	    test_extent_manual_hook,
 	    test_extent_auto_hook,
+	    test_extent_split_failure_calls_dalloc,
 	    test_arenas_create_ext_with_ehooks_no_metadata,
 	    test_arenas_create_ext_with_ehooks_with_metadata);
 }

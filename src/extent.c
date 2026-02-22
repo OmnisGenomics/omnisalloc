@@ -51,6 +51,8 @@ static edata_t *extent_try_coalesce(tsdn_t *tsdn, pac_t *pac, ehooks_t *ehooks,
 static edata_t *extent_alloc_retained(tsdn_t *tsdn, pac_t *pac,
     ehooks_t *ehooks, edata_t *expand_edata, size_t size, size_t alignment,
     bool zero, bool *commit, bool guarded);
+static bool extent_dalloc_wrapper_try(tsdn_t *tsdn, pac_t *pac,
+    ehooks_t *ehooks, edata_t *edata);
 static bool extent_decommit_wrapper(tsdn_t *tsdn, ehooks_t *ehooks,
     edata_t *edata, size_t offset, size_t length);
 
@@ -587,12 +589,16 @@ extent_recycle_split(tsdn_t *tsdn, pac_t *pac, ehooks_t *ehooks,
 		if (to_leak != NULL) {
 			extent_deregister_no_gdump_sub(tsdn, pac, to_leak);
 			/*
-			 * May go down the purge path (which assume no ecache
-			 * locks).  Only happens with OOM caused split failures.
+			 * May go down the purge path (which assumes no ecache
+			 * locks).  First attempt dalloc to release the extent via
+			 * hooks.  If that fails, fall back to abandoning VM.
 			 */
 			malloc_mutex_unlock(tsdn, &ecache->mtx);
-			extents_abandon_vm(tsdn, pac, ehooks, ecache, to_leak,
-			    growing_retained);
+			if (extent_dalloc_wrapper_try(tsdn, pac, ehooks,
+			    to_leak)) {
+				extents_abandon_vm(tsdn, pac, ehooks, ecache,
+				    to_leak, growing_retained);
+			}
 			malloc_mutex_lock(tsdn, &ecache->mtx);
 		}
 		return NULL;
@@ -783,13 +789,23 @@ extent_grow_retained(tsdn_t *tsdn, pac_t *pac, ehooks_t *ehooks,
 			extent_record(tsdn, pac, ehooks, &pac->ecache_retained,
 			    to_salvage);
 		}
-		if (to_leak != NULL) {
-			extent_deregister_no_gdump_sub(tsdn, pac, to_leak);
-			extents_abandon_vm(tsdn, pac, ehooks,
-			    &pac->ecache_retained, to_leak, true);
+			if (to_leak != NULL) {
+				extent_deregister_no_gdump_sub(tsdn, pac, to_leak);
+				/*
+				 * Need to release grow_mtx before the dalloc /
+				 * abandon paths.
+				 */
+				malloc_mutex_unlock(tsdn, &pac->grow_mtx);
+				if (extent_dalloc_wrapper_try(tsdn, pac, ehooks,
+				    to_leak)) {
+					extents_abandon_vm(tsdn, pac, ehooks,
+					    &pac->ecache_retained, to_leak,
+					    true);
+				}
+				return NULL;
+			}
+			goto label_err;
 		}
-		goto label_err;
-	}
 
 	if (*commit && !edata_committed_get(edata)) {
 		if (extent_commit_impl(tsdn, ehooks, edata, 0,
