@@ -25,6 +25,8 @@ bool tsd_booted = false;
 #if defined(JEMALLOC_LEGACY_WINDOWS_SUPPORT) || !defined(_MSC_VER)
 DWORD tsd_tsd;
 tsd_wrapper_t tsd_boot_wrapper = {TSD_INITIALIZER, false};
+/* Per-thread marker for DLL_THREAD_DETACH cleanup phase. */
+JEMALLOC_TSD_TYPE_ATTR(bool) tsd_cleanup_in_progress = false;
 #else
 JEMALLOC_TSD_TYPE_ATTR(tsd_wrapper_t) tsd_wrapper_tls = { TSD_INITIALIZER, false };
 #endif
@@ -489,6 +491,9 @@ _tls_callback(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 		break;
 #endif
 	case DLL_THREAD_DETACH:
+#if defined(JEMALLOC_LEGACY_WINDOWS_SUPPORT) || !defined(_MSC_VER)
+		tsd_cleanup_in_progress = true;
+#endif
 		_malloc_thread_cleanup();
 		break;
 	default:

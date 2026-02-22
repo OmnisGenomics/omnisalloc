@@ -21,6 +21,8 @@ typedef struct {
 extern DWORD tsd_tsd;
 extern tsd_wrapper_t tsd_boot_wrapper;
 extern bool tsd_booted;
+/* Set during DLL_THREAD_DETACH while jemalloc cleanup callbacks run. */
+extern JEMALLOC_TSD_TYPE_ATTR(bool) tsd_cleanup_in_progress;
 #if defined(_M_ARM64EC)
 #define JEMALLOC_WIN32_TLSGETVALUE2 0
 #else
@@ -50,6 +52,11 @@ tsd_cleanup_wrapper(void) {
 			/* Trigger another cleanup round. */
 			return true;
 		}
+	}
+	/* Prevent later TLS dtors from observing a freed wrapper pointer. */
+	if (!TlsSetValue(tsd_tsd, NULL)) {
+		malloc_write("<jemalloc>: Error clearing TSD\n");
+		abort();
 	}
 	malloc_tsd_dalloc(wrapper);
 	return false;
@@ -88,6 +95,15 @@ tsd_wrapper_get(bool init) {
 			/* MSVC is finicky about aggregate initialization. */
 			tsd_t tsd_initializer = TSD_INITIALIZER;
 			wrapper->val = tsd_initializer;
+			if (unlikely(tsd_cleanup_in_progress)) {
+				/*
+				 * Thread detach callbacks already ran; force
+				 * no-cleanup mode if jemalloc is accessed again
+				 * from later TLS dtors.
+				 */
+				tsd_atomic_store(&wrapper->val.state,
+				    tsd_state_purgatory, ATOMIC_RELAXED);
+			}
 		}
 		tsd_wrapper_set(wrapper);
 	}
