@@ -94,6 +94,7 @@ JE_CONCAT_VVV(CXXFLAGS, CONFIGURE_CXXFLAGS, SPECIFIED_CXXFLAGS)
 
 CONFIGURE_LDFLAGS=
 SPECIFIED_LDFLAGS="${LDFLAGS}"
+SPECIFIED_NM="${NM}"
 dnl JE_LDFLAGS_ADD(ldflag)
 dnl
 dnl LDFLAGS is the concatenation of CONFIGURE_LDFLAGS and SPECIFIED_LDFLAGS
@@ -212,6 +213,21 @@ dnl If CFLAGS isn't defined, set CFLAGS to something reasonable.  Otherwise,
 dnl just prevent autoconf from molesting CFLAGS.
 CFLAGS=$CFLAGS
 AC_PROG_CC
+
+if test "x$GCC" = "xyes" ; then
+  AC_CACHE_CHECK([whether compiler is clang],
+                 [je_cv_clang],
+                 [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],
+                                                     [
+#ifndef __clang__
+  int fail[-1];
+#endif
+])],
+                               [je_cv_clang=yes],
+                               [je_cv_clang=no])])
+else
+  je_cv_clang=no
+fi
 
 if test "x$GCC" != "xyes" ; then
   AC_CACHE_CHECK([whether compiler is MSVC],
@@ -640,15 +656,31 @@ AC_PROG_AR
 AN_MAKEVAR([NM], [AC_PROG_NM])
 AN_PROGRAM([nm], [AC_PROG_NM])
 AC_DEFUN([AC_PROG_NM], [
-  dnl Prefer gcc-nm when building with GCC (e.g. LTO objects), and
-  dnl fall back to plain nm when gcc-nm is unavailable.
-  if test "x$GCC" = "xyes" ; then
-    AC_CHECK_TOOL(NM, gcc-nm, :)
-    if test "x$NM" = "x:" ; then
-      AC_CHECK_TOOL(NM, nm, :)
-    fi
-  else
-    AC_CHECK_TOOL(NM, nm, :)
+  AC_CHECK_TOOL(NM, nm, :)
+
+  dnl GCC LTO objects may require the compiler's nm wrapper to expose symbols.
+  dnl Keep user-specified NM unchanged.
+  if test "x${SPECIFIED_NM}" = "x" -a "x$GCC" = "xyes" \
+      -a "x$je_cv_clang" != "xyes"; then
+    case " ${SPECIFIED_CFLAGS} ${SPECIFIED_CXXFLAGS} " in
+      *" -flto"*)
+        je_cc_prog=`echo "${CC}" | awk '{print [$]1}'`
+        je_cc_prog=`basename "${je_cc_prog}"`
+        je_gcc_nm=
+        for nm_candidate in "${je_cc_prog}-nm" gcc-nm ; do
+          if "${nm_candidate}" --version > /dev/null 2>&1 ; then
+            je_gcc_nm="${nm_candidate}"
+            break
+          fi
+        done
+        if test "x${je_gcc_nm}" != "x" ; then
+          NM="${je_gcc_nm}"
+          AC_MSG_NOTICE([Using ${NM} for GCC LTO symbol extraction])
+        fi
+        ;;
+      *)
+        ;;
+    esac
   fi
 ])
 AC_PROG_NM
