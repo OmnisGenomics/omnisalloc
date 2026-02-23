@@ -107,8 +107,8 @@ abort() {
 
 # Environment variables are not supported.
 run_cmd() {
-    echo "==> \$@" >> run_test.log
-    \$@ >> run_test.log 2>&1 || abort
+    echo "==> \\$@" >> run_test.log
+    \\$@ >> run_test.log 2>&1 || abort
 }
 
 echo "=> run_test_%(ind)d: %(config_line)s"
