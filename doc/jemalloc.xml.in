@@ -2720,7 +2720,12 @@ struct extent_hooks_s {
         actually be physically resident if they correspond to demand-zeroed
         virtual memory that has not yet been touched.  This is a multiple of the
         page size, and is larger than <link
-        linkend="stats.active"><mallctl>stats.active</mallctl></link>.</para></listitem>
+        linkend="stats.active"><mallctl>stats.active</mallctl></link>.</para>
+        <para>This statistic describes allocator-managed mappings only.  It is
+        therefore not expected to exactly match process RSS as reported by the
+        operating system, which may include non-allocator mappings (stacks,
+        shared libraries, file-backed mappings, etc.), while omitting some
+        demand-zero pages that have not been faulted in.</para></listitem>
       </varlistentry>
 
       <varlistentry id="stats.mapped">
@@ -2986,7 +2991,13 @@ struct extent_hooks_s {
           (<type>size_t</type>)
           <literal>r-</literal>
         </term>
-        <listitem><para>Number of pages in active extents.</para></listitem>
+        <listitem><para>Number of pages in active extents.</para>
+        <para>The <mallctl>pactive</mallctl>, <link
+        linkend="stats.arenas.i.pdirty"><mallctl>pdirty</mallctl></link>, and
+        <link
+        linkend="stats.arenas.i.pmuzzy"><mallctl>pmuzzy</mallctl></link>
+        counters describe allocator page states, not a strict partition of OS
+        RSS.</para></listitem>
       </varlistentry>
 
       <varlistentry id="stats.arenas.i.pdirty">
