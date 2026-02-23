@@ -2227,7 +2227,7 @@ malloc_init_narenas(tsdn_t *tsdn) {
 		} else {
 			if (ncpus >= MALLOCX_ARENA_LIMIT) {
 				malloc_printf("<jemalloc>: narenas w/ percpu"
-				    "arena beyond limit (%d)\n", ncpus);
+				    "arena beyond limit (%u)\n", ncpus);
 				if (opt_abort) {
 					abort();
 				}
@@ -2275,7 +2275,7 @@ malloc_init_narenas(tsdn_t *tsdn) {
 	 */
 	if (narenas_auto >= MALLOCX_ARENA_LIMIT) {
 		narenas_auto = MALLOCX_ARENA_LIMIT - 1;
-		malloc_printf("<jemalloc>: Reducing narenas to limit (%d)\n",
+		malloc_printf("<jemalloc>: Reducing narenas to limit (%u)\n",
 		    narenas_auto);
 	}
 	narenas_total_set(narenas_auto);
