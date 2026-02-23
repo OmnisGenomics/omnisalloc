@@ -48,6 +48,26 @@ TEST_BEGIN(test_alignment_errors) {
 }
 TEST_END
 
+TEST_BEGIN(test_non_multiple_size) {
+	size_t alignment = 64;
+	size_t size = 65;
+	void *p;
+
+	set_errno(0);
+	p = aligned_alloc_test_call(alignment, size);
+	expect_ptr_not_null(p,
+	    "Expected aligned_alloc(%zu, %zu) to succeed",
+	    alignment, size);
+	expect_true(((uintptr_t)p & (alignment - 1)) == 0,
+	    "Expected aligned_alloc(%zu, %zu) result to be aligned",
+	    alignment, size);
+	expect_zu_ge(TEST_MALLOC_SIZE(p), size,
+	    "Expected usable size to be >= requested size");
+
+	free(p);
+}
+TEST_END
+
 
 /*
  * GCC "-Walloc-size-larger-than" warning detects when one of the memory
@@ -165,6 +185,7 @@ int
 main(void) {
 	return test(
 	    test_alignment_errors,
+	    test_non_multiple_size,
 	    test_oom_errors,
 	    test_alignment_and_size,
 	    test_zero_alloc);

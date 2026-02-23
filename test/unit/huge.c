@@ -10,6 +10,17 @@ const char *malloc_conf =
 #define HUGE_SZ (2 << 20)
 #define SMALL_SZ (8)
 
+static size_t huge_purge_forced_calls;
+static extent_hooks_t huge_counting_hooks;
+
+static bool
+purge_forced_count(extent_hooks_t *extent_hooks, void *addr, size_t sz,
+    size_t offset, size_t length, unsigned arena_ind) {
+	huge_purge_forced_calls++;
+	return ehooks_default_extent_hooks.purge_forced(extent_hooks, addr, sz,
+	    offset, length, arena_ind);
+}
+
 static ssize_t
 arena_decay_ms_read_ctl(unsigned arena, const char *state) {
 	char cmd[64];
@@ -39,6 +50,52 @@ TEST_BEGIN(huge_decay_configuration) {
 	    HUGE_MUZZY_DECAY_MS,
 	    "Huge arena muzzy_decay_ms should follow configured default");
 	dallocx(ptr, 0);
+}
+TEST_END
+
+TEST_BEGIN(huge_no_immediate_purge_without_background_thread) {
+	test_skip_if(is_background_thread_enabled());
+
+	unsigned arena;
+	size_t arena_sz = sizeof(arena);
+
+	/* Force huge arena creation and discover its arena index. */
+	void *ptr = mallocx(HUGE_SZ, 0);
+	expect_ptr_not_null(ptr, "Failed to allocate huge size");
+	expect_d_eq(mallctl("arenas.lookup", &arena, &arena_sz, &ptr,
+	    sizeof(ptr)), 0, "Unexpected mallctl() failure");
+	expect_u_gt(arena, 0, "Huge allocation should not come from arena 0");
+	dallocx(ptr, 0);
+
+	/* Install counting hook for forced purge operations. */
+	extent_hooks_t *old_hooks;
+	size_t hooks_sz = sizeof(old_hooks);
+	huge_counting_hooks = ehooks_default_extent_hooks;
+	huge_counting_hooks.purge_forced = &purge_forced_count;
+	extent_hooks_t *hooks = &huge_counting_hooks;
+	char cmd[64];
+	malloc_snprintf(cmd, sizeof(cmd), "arena.%u.extent_hooks", arena);
+	expect_d_eq(mallctl(cmd, &old_hooks, &hooks_sz, &hooks, sizeof(hooks)), 0,
+	    "Failed to install extent hooks on huge arena");
+
+	/* Ensure stale state does not affect this test. */
+	expect_d_eq(mallctl("arena.0.purge", NULL, NULL, NULL, 0), 0,
+	    "Unexpected mallctl() failure");
+	huge_purge_forced_calls = 0;
+
+	/*
+	 * With positive dirty_decay_ms and no background thread, huge frees
+	 * should not force immediate purging on the caller thread.
+	 */
+	ptr = mallocx(HUGE_SZ, 0);
+	expect_ptr_not_null(ptr, "Failed to allocate huge size");
+	dallocx(ptr, 0);
+	expect_zu_eq(huge_purge_forced_calls, 0,
+	    "Unexpected immediate forced purge for huge free");
+
+	/* Restore original hooks so later tests are unaffected. */
+	expect_d_eq(mallctl(cmd, NULL, NULL, &old_hooks, sizeof(old_hooks)), 0,
+	    "Failed to restore extent hooks on huge arena");
 }
 TEST_END
 
@@ -142,6 +199,7 @@ int
 main(void) {
 	return test(
 	    huge_decay_configuration,
+	    huge_no_immediate_purge_without_background_thread,
 	    huge_allocation,
 	    huge_mallocx,
 	    huge_bind_thread);

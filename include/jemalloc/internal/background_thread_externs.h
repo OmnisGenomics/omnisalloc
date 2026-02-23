@@ -8,6 +8,7 @@
 
 extern bool opt_background_thread;
 extern size_t opt_max_background_threads;
+extern bool background_thread_tsan_disabled;
 extern malloc_mutex_t background_thread_lock;
 extern atomic_b_t background_thread_enabled_state;
 extern size_t n_background_threads;

@@ -48,6 +48,12 @@ static bool try_purge_lazy = true;
 static bool try_purge_forced = true;
 static bool try_split = true;
 static bool try_merge = true;
+/*
+ * If non-zero, fail split hook invocation number fail_split_call (1-based)
+ * since the last split_call_count reset.
+ */
+static unsigned fail_split_call;
+static unsigned split_call_count;
 
 /* Set to false prior to operations, then introspect after operations. */
 static bool called_alloc;
@@ -243,6 +249,10 @@ extent_split_hook(extent_hooks_t *extent_hooks, void *addr, size_t size,
 	expect_ptr_eq(extent_hooks->split, extent_split_hook,
 	    "Wrong hook function");
 	called_split = true;
+	split_call_count++;
+	if (fail_split_call != 0 && split_call_count == fail_split_call) {
+		return true;
+	}
 	if (!try_split) {
 		return true;
 	}
@@ -286,4 +296,6 @@ extent_hooks_prep(void) {
 	sz = sizeof(default_hooks);
 	expect_d_eq(mallctl("arena.0.extent_hooks", (void *)&default_hooks, &sz,
 	    NULL, 0), 0, "Unexpected mallctl() error");
+	fail_split_call = 0;
+	split_call_count = 0;
 }

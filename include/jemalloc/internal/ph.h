@@ -171,8 +171,52 @@ phn_merge(void *phn0, void *phn1, size_t offset, ph_cmp_t cmp) {
 	return result;
 }
 
+JEMALLOC_ALWAYS_INLINE void
+phn_break_sibling_cycle(void *phn, size_t offset) {
+	void *slow = phn;
+	void *fast = phn;
+
+	while (fast != NULL) {
+		fast = phn_next_get(fast, offset);
+		if (fast == NULL) {
+			return;
+		}
+		fast = phn_next_get(fast, offset);
+		slow = phn_next_get(slow, offset);
+		if (fast == NULL || slow == NULL) {
+			return;
+		}
+		if (fast != slow) {
+			continue;
+		}
+
+		/* Cycle detected: find entry, then sever at cycle tail. */
+		void *entry = phn;
+		while (entry != slow) {
+			entry = phn_next_get(entry, offset);
+			slow = phn_next_get(slow, offset);
+			assert(entry != NULL);
+			assert(slow != NULL);
+		}
+
+		void *tail = entry;
+		while (phn_next_get(tail, offset) != entry) {
+			tail = phn_next_get(tail, offset);
+			assert(tail != NULL);
+		}
+		phn_next_set(tail, NULL, offset);
+		return;
+	}
+}
+
 JEMALLOC_ALWAYS_INLINE void *
 phn_merge_siblings(void *phn, size_t offset, ph_cmp_t cmp) {
+	/*
+	 * Defensive against corrupted sibling cycles.  Corruption here can lead
+	 * to pathological merge behavior while holding allocator locks.
+	 */
+	phn_break_sibling_cycle(phn, offset);
+
 	void *head = NULL;
 	void *tail = NULL;
 	void *phn0 = phn;
@@ -339,6 +383,20 @@ ph_try_aux_merge_pair(ph_t *ph, size_t offset, ph_cmp_t cmp) {
 	}
 	void *phn1 = phn_next_get(phn0, offset);
 	if (phn1 == NULL) {
+		return true;
+	}
+	if (unlikely(phn1 == phn0)) {
+		/*
+		 * Defensive against a self-referential aux element.  Keep the
+		 * element as a single aux node so future operations can proceed.
+		 */
+		if (phn0 != ph->root) {
+			phn_next_set(phn0, NULL, offset);
+			phn_prev_set(phn0, ph->root, offset);
+			phn_next_set(ph->root, phn0, offset);
+		} else {
+			phn_next_set(ph->root, NULL, offset);
+		}
 		return true;
 	}
 	void *next_phn1 = phn_next_get(phn1, offset);

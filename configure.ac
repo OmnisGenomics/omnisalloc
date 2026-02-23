@@ -453,13 +453,22 @@ case "${host_cpu}" in
 	;;
   aarch64|arm*)
 	HAVE_CPU_SPINWAIT=1
-	dnl isb is a better equivalent to the pause instruction on x86.
-	AC_CACHE_VAL([je_cv_isb],
-	  [JE_COMPILABLE([isb instruction], [],
-			[[__asm__ volatile("isb"); return 0;]],
-			[je_cv_isb])])
-	if test "x${je_cv_isb}" = "xyes" ; then
-	    CPU_SPINWAIT='__asm__ volatile("isb")'
+	dnl On newer arm64 cores (e.g. ARMv9), sb is a lower-overhead option.
+	AC_CACHE_VAL([je_cv_sb],
+	  [JE_COMPILABLE([sb instruction], [],
+			[[__asm__ volatile("sb"); return 0;]],
+			[je_cv_sb])])
+	if test "x${je_cv_sb}" = "xyes" ; then
+	    CPU_SPINWAIT='__asm__ volatile("sb")'
+	else
+	    dnl Fallback for older architectures/toolchains.
+	    AC_CACHE_VAL([je_cv_isb],
+	      [JE_COMPILABLE([isb instruction], [],
+				[[__asm__ volatile("isb"); return 0;]],
+				[je_cv_isb])])
+	    if test "x${je_cv_isb}" = "xyes" ; then
+		CPU_SPINWAIT='__asm__ volatile("isb")'
+	    fi
 	fi
 	;;
   *)
@@ -474,14 +483,14 @@ AC_ARG_WITH([lg_vaddr],
   [LG_VADDR="$with_lg_vaddr"], [LG_VADDR="detect"])
 
 case "${host_cpu}" in
-  aarch64)
+  aarch64|arm64|arm64e)
     if test "x$LG_VADDR" = "xdetect"; then
       AC_MSG_CHECKING([number of significant virtual address bits])
       if test "x${LG_SIZEOF_PTR}" = "x2" ; then
-        #aarch64 ILP32
+        # arm64 ILP32
         LG_VADDR=32
       else
-        #aarch64 LP64
+        # arm64 LP64
         LG_VADDR=48
       fi
       AC_MSG_RESULT([$LG_VADDR])
@@ -639,7 +648,18 @@ AC_PROG_AR
 
 AN_MAKEVAR([NM], [AC_PROG_NM])
 AN_PROGRAM([nm], [AC_PROG_NM])
-AC_DEFUN([AC_PROG_NM], [AC_CHECK_TOOL(NM, nm, :)])
+AC_DEFUN([AC_PROG_NM], [
+  dnl Prefer gcc-nm when building with GCC (e.g. LTO objects), and
+  dnl fall back to plain nm when gcc-nm is unavailable.
+  if test "x$GCC" = "xyes" ; then
+    AC_CHECK_TOOL(NM, gcc-nm, :)
+    if test "x$NM" = "x:" ; then
+      AC_CHECK_TOOL(NM, nm, :)
+    fi
+  else
+    AC_CHECK_TOOL(NM, nm, :)
+  fi
+])
 AC_PROG_NM
 
 AC_PROG_AWK
@@ -652,7 +672,8 @@ AC_ARG_WITH([version],
   [AS_HELP_STRING([--with-version=<major>.<minor>.<bugfix>-<nrev>-g<gid>],
    [Version string])],
   [
-    echo "${with_version}" | grep -E ['^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-g[0-9a-f]+$'] > /dev/null 2>&1
+    dnl Use BRE syntax for grep portability (e.g. OpenBSD grep defaults).
+    echo "${with_version}" | grep ['^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-[0-9][0-9]*-g[0-9a-f][0-9a-f]*$'] > /dev/null 2>&1
     if test $? -eq 0 ; then
       echo "$with_version" > "${objroot}VERSION"
     else
@@ -663,7 +684,12 @@ AC_ARG_WITH([version],
     fi
   ], [
     dnl Set VERSION if source directory is inside a git repository.
-    if test "x`test ! \"${srcroot}\" && cd \"${srcroot}\"; git rev-parse --is-inside-work-tree 2>/dev/null`" = "xtrue" ; then
+    if test "x${srcroot}" = "x" ; then
+      je_git_root="."
+    else
+      je_git_root="${srcroot}"
+    fi
+    if test "x`cd \"${je_git_root}\"; git rev-parse --is-inside-work-tree 2>/dev/null`" = "xtrue" ; then
       dnl Pattern globs aren't powerful enough to match both single- and
       dnl double-digit version numbers, so iterate over patterns to support up
       dnl to version 99.99.99 without any accidental matches.
@@ -672,7 +698,7 @@ AC_ARG_WITH([version],
                      '[0-9][0-9].[0-9].[0-9]' '[0-9][0-9].[0-9].[0-9][0-9]' \
                      '[0-9][0-9].[0-9][0-9].[0-9]' \
                      '[0-9][0-9].[0-9][0-9].[0-9][0-9]']; do
-        (test ! "${srcroot}" && cd "${srcroot}"; git describe --long --abbrev=40 --match="${pattern}") > "${objroot}VERSION.tmp" 2>/dev/null
+        (cd "${je_git_root}"; git describe --long --abbrev=40 --match="${pattern}") > "${objroot}VERSION.tmp" 2>/dev/null
         if test $? -eq 0 ; then
           mv "${objroot}VERSION.tmp" "${objroot}VERSION"
           break
@@ -805,6 +831,15 @@ case "${host}" in
 	abi="elf"
 	AC_DEFINE([JEMALLOC_HAS_ALLOCA_H], [ ], [ ])
 	AC_DEFINE([JEMALLOC_SYSCTL_VM_OVERCOMMIT], [ ], [ ])
+	AC_DEFINE([JEMALLOC_THREADED_INIT], [ ], [ ])
+	AC_DEFINE([JEMALLOC_USE_CXX_THROW], [ ], [ ])
+	;;
+  *-*-gnu*)
+	dnl syscall(2) and secure_getenv(3) are exposed by _GNU_SOURCE.
+	JE_APPEND_VS(CPPFLAGS, -D_GNU_SOURCE)
+	JE_APPEND_VS(CPPFLAGS, -DPATH_MAX=8192)
+	abi="elf"
+	AC_DEFINE([JEMALLOC_HAS_ALLOCA_H], [ ], [ ])
 	AC_DEFINE([JEMALLOC_THREADED_INIT], [ ], [ ])
 	AC_DEFINE([JEMALLOC_USE_CXX_THROW], [ ], [ ])
 	;;
@@ -1911,7 +1946,14 @@ AC_ARG_WITH([lg_page],
   [AS_HELP_STRING([--with-lg-page=<lg-page>], [Base 2 log of system page size])],
   [LG_PAGE="$with_lg_page"], [LG_PAGE="detect"])
 case "${host}" in
-  aarch64-apple-darwin*)
+  aarch64*-linux* | arm64*-linux*)
+      dnl Prefer 64K allocation granularity on arm64 Linux so binaries are
+      dnl compatible across 4K, 16K, and 64K kernel page-size environments.
+      if test "x$LG_PAGE" = "xdetect"; then
+        LG_PAGE=16
+      fi
+      ;;
+  aarch64-apple-darwin* | arm64*-apple-darwin*)
       dnl When cross-compile for Apple M1 and no page size specified, use the
       dnl default and skip detecting the page size (which is likely incorrect).
       if test "x${host}" != "x${build}" -a "x$LG_PAGE" = "xdetect"; then
@@ -2249,6 +2291,15 @@ AC_CHECK_FUNC([pthread_setaffinity_np],
              )
 if test "x$have_pthread_setaffinity_np" = "x1" ; then
   AC_DEFINE([JEMALLOC_HAVE_PTHREAD_SETAFFINITY_NP], [ ], [ ])
+fi
+
+dnl Check if the pthread_getaffinity_np function exists.
+AC_CHECK_FUNC([pthread_getaffinity_np],
+              [have_pthread_getaffinity_np="1"],
+              [have_pthread_getaffinity_np="0"]
+             )
+if test "x$have_pthread_getaffinity_np" = "x1" ; then
+  AC_DEFINE([JEMALLOC_HAVE_PTHREAD_GETAFFINITY_NP], [ ], [ ])
 fi
 
 dnl Check if the Solaris/BSD issetugid function exists.
@@ -2693,7 +2744,21 @@ else
   enable_initial_exec_tls="1"
 fi
 ],
-[enable_initial_exec_tls="1"]
+[case "${host_cpu}" in
+  aarch64|arm64|arm*)
+    if test "x${abi}" = "xelf" ; then
+      dnl On arm/aarch64 ELF, initial-exec TLS can be fragile for late-loaded
+      dnl shared libraries (e.g. plugin/import-order sensitive scenarios).
+      dnl Default to generic TLS unless explicitly enabled.
+      enable_initial_exec_tls="0"
+    else
+      enable_initial_exec_tls="1"
+    fi
+    ;;
+  *)
+    enable_initial_exec_tls="1"
+    ;;
+esac]
 )
 AC_SUBST([enable_initial_exec_tls])
 

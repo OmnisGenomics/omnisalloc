@@ -289,6 +289,104 @@ TEST_BEGIN(test_extent_split_failure_calls_dalloc) {
 }
 TEST_END
 
+TEST_BEGIN(test_extent_second_split_failure_salvages_lead) {
+	unsigned arena_ind;
+	size_t old_size, new_size, sz;
+	size_t hooks_mib[3];
+	size_t hooks_miblen;
+	extent_hooks_t *new_hooks, *old_hooks;
+	bool retain;
+	size_t retain_sz = sizeof(retain);
+	size_t large0;
+	size_t alignment = ((size_t)1) << 20;
+	size_t request_size;
+
+	expect_d_eq(mallctl("opt.retain", (void *)&retain, &retain_sz, NULL, 0),
+	    0, "Unexpected mallctl() failure");
+	test_skip_if(!retain);
+
+	extent_hooks_prep();
+
+	sz = sizeof(unsigned);
+	expect_d_eq(mallctl("arenas.create", (void *)&arena_ind, &sz, NULL, 0),
+	    0, "Unexpected mallctl() failure");
+
+	/* Install custom extent hooks. */
+	hooks_miblen = sizeof(hooks_mib) / sizeof(size_t);
+	expect_d_eq(mallctlnametomib("arena.0.extent_hooks", hooks_mib,
+	    &hooks_miblen), 0, "Unexpected mallctlnametomib() failure");
+	hooks_mib[1] = (size_t)arena_ind;
+	old_size = sizeof(extent_hooks_t *);
+	new_hooks = &hooks;
+	new_size = sizeof(extent_hooks_t *);
+	expect_d_eq(mallctlbymib(hooks_mib, hooks_miblen,
+	    (void *)&old_hooks, &old_size, (void *)&new_hooks, new_size), 0,
+	    "Unexpected extent_hooks error");
+
+	sz = sizeof(size_t);
+	expect_d_eq(mallctl("arenas.lextent.0.size", (void *)&large0, &sz, NULL, 0),
+	    0, "Unexpected arenas.lextent.0.size failure");
+	expect_true(large0 < alignment / 2, "Unexpectedly large large0");
+	request_size = alignment / 2 + large0;
+
+	int flags = MALLOCX_ARENA(arena_ind) | MALLOCX_TCACHE_NONE;
+	int prime_flags = flags | MALLOCX_ALIGN(alignment);
+	int aligned_flags = flags | MALLOCX_ALIGN(alignment);
+
+	try_alloc = true;
+	try_dalloc = true;
+	try_destroy = true;
+	try_commit = true;
+	try_decommit = true;
+	try_purge_lazy = true;
+	try_purge_forced = true;
+	try_split = true;
+	try_merge = true;
+	fail_split_call = 0;
+	split_call_count = 0;
+
+	/* Prime one extent, then force a deterministic misaligned trail extent. */
+	void *primed = mallocx(alignment * 2, prime_flags);
+	expect_ptr_not_null(primed, "Unexpected mallocx() error");
+	dallocx(primed, prime_flags);
+
+	try_alloc = false;
+	try_merge = false;
+	void *hold = mallocx(alignment / 2, flags);
+	expect_ptr_not_null(hold, "Unexpected mallocx() error");
+
+	/*
+	 * From a base+alignment/2 extent, requesting request_size with alignment
+	 * alignment requires both lead and trail splits.  Fail exactly the second
+	 * split so to_salvage is populated.
+	 */
+	fail_split_call = 2;
+	split_call_count = 0;
+	called_dalloc = false;
+	void *failed = mallocx(request_size, aligned_flags);
+	expect_ptr_null(failed, "Expected allocation failure without fresh alloc");
+	expect_true(called_dalloc, "Expected dalloc cleanup for split failure");
+	expect_u_eq(split_call_count, 2, "Expected second split failure path");
+
+	/* With alloc still disabled, success here requires salvaged lead reuse. */
+	fail_split_call = 0;
+	split_call_count = 0;
+	called_alloc = false;
+	void *salvaged = mallocx(64, flags);
+	expect_ptr_not_null(salvaged, "Expected allocation from salvaged lead");
+	expect_false(called_alloc, "Unexpected fresh extent allocation");
+
+	dallocx(salvaged, flags);
+	dallocx(hold, flags);
+	try_alloc = true;
+	try_merge = true;
+
+	/* Restore extent hooks. */
+	expect_d_eq(mallctlbymib(hooks_mib, hooks_miblen, NULL, NULL,
+	    (void *)&old_hooks, new_size), 0, "Unexpected extent_hooks error");
+}
+TEST_END
+
 static void
 test_arenas_create_ext_base(arena_config_t config,
 	bool expect_hook_data, bool expect_hook_metadata)
@@ -342,6 +440,7 @@ main(void) {
 	    test_extent_manual_hook,
 	    test_extent_auto_hook,
 	    test_extent_split_failure_calls_dalloc,
+	    test_extent_second_split_failure_salvages_lead,
 	    test_arenas_create_ext_with_ehooks_no_metadata,
 	    test_arenas_create_ext_with_ehooks_with_metadata);
 }

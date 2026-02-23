@@ -428,6 +428,9 @@
 /* pthread_setaffinity_np support */
 #undef JEMALLOC_HAVE_PTHREAD_SETAFFINITY_NP
 
+/* pthread_getaffinity_np support */
+#undef JEMALLOC_HAVE_PTHREAD_GETAFFINITY_NP
+
 /*
  * If defined, all the features necessary for background threads are present.
  */

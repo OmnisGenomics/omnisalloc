@@ -94,6 +94,7 @@ LIBJEMALLOC := $(LIBPREFIX)jemalloc$(install_suffix)
 # Lists of files.
 BINS := $(objroot)bin/jemalloc-config $(objroot)bin/jemalloc.sh $(objroot)bin/jeprof
 C_HDRS := $(objroot)include/jemalloc/jemalloc$(install_suffix).h
+MSVC_COMPAT_HDRS := $(srcroot)include/msvc_compat/strings.h
 C_SRCS := $(srcroot)src/jemalloc.c \
 	$(srcroot)src/arena.c \
 	$(srcroot)src/background_thread.c \
@@ -205,6 +206,8 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/atomic.c \
 	$(srcroot)test/unit/background_thread.c \
 	$(srcroot)test/unit/background_thread_enable.c \
+	$(srcroot)test/unit/background_thread_tsan.c \
+	$(srcroot)test/unit/mutex_preboot.c \
 	$(srcroot)test/unit/base.c \
 	$(srcroot)test/unit/batch_alloc.c \
 	$(srcroot)test/unit/batcher.c \
@@ -242,6 +245,7 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/log.c \
 	$(srcroot)test/unit/mallctl.c \
 	$(srcroot)test/unit/malloc_conf_2.c \
+	$(srcroot)test/unit/malloc_conf_bootstrap_sanitizer.c \
 	$(srcroot)test/unit/malloc_io.c \
 	$(srcroot)test/unit/math.c \
 	$(srcroot)test/unit/mpsc_queue.c \
@@ -279,6 +283,7 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/retained.c \
 	$(srcroot)test/unit/rtree.c \
 	$(srcroot)test/unit/safety_check.c \
+	$(srcroot)test/unit/suppress_conf_warnings.c \
 	$(srcroot)test/unit/sc.c \
 	$(srcroot)test/unit/sec.c \
 	$(srcroot)test/unit/seq.c \
@@ -309,19 +314,20 @@ TESTS_UNIT += \
 	$(srcroot)test/unit/batch_alloc_prof.c
 endif
 TESTS_INTEGRATION := $(srcroot)test/integration/aligned_alloc.c \
-	$(srcroot)test/integration/allocated.c \
-	$(srcroot)test/integration/extent.c \
-	$(srcroot)test/integration/malloc.c \
-	$(srcroot)test/integration/mallocx.c \
-	$(srcroot)test/integration/MALLOCX_ARENA.c \
-	$(srcroot)test/integration/overflow.c \
-	$(srcroot)test/integration/posix_memalign.c \
-	$(srcroot)test/integration/rallocx.c \
-	$(srcroot)test/integration/sdallocx.c \
-	$(srcroot)test/integration/slab_sizes.c \
-	$(srcroot)test/integration/thread_arena.c \
-	$(srcroot)test/integration/thread_tcache_enabled.c \
-	$(srcroot)test/integration/xallocx.c
+		$(srcroot)test/integration/allocated.c \
+		$(srcroot)test/integration/extent.c \
+		$(srcroot)test/integration/malloc.c \
+		$(srcroot)test/integration/mallocx.c \
+		$(srcroot)test/integration/MALLOCX_ARENA.c \
+		$(srcroot)test/integration/overflow.c \
+		$(srcroot)test/integration/posix_memalign.c \
+		$(srcroot)test/integration/rallocx.c \
+		$(srcroot)test/integration/sdallocx.c \
+		$(srcroot)test/integration/slab_sizes.c \
+		$(srcroot)test/integration/thread_arena.c \
+		$(srcroot)test/integration/thread_exit_tsd_reinit.c \
+		$(srcroot)test/integration/thread_tcache_enabled.c \
+		$(srcroot)test/integration/xallocx.c
 ifeq (@enable_experimental_smallocx@, 1)
 TESTS_INTEGRATION += \
   $(srcroot)test/integration/smallocx.c
@@ -505,11 +511,17 @@ endif
 
 $(C_SYMS): %.sym:
 	@mkdir -p $(@D)
-	$(DUMP_SYMS) $< | $(AWK) -f $(objroot)include/jemalloc/internal/private_symbols.awk > $@
+	$(DUMP_SYMS) $< > $@.nm
+	test -s $@.nm
+	$(AWK) -f $(objroot)include/jemalloc/internal/private_symbols.awk $@.nm > $@
+	rm -f $@.nm
 
 $(C_JET_SYMS): %.sym:
 	@mkdir -p $(@D)
-	$(DUMP_SYMS) $< | $(AWK) -f $(objroot)include/jemalloc/internal/private_symbols_jet.awk > $@
+	$(DUMP_SYMS) $< > $@.nm
+	test -s $@.nm
+	$(AWK) -f $(objroot)include/jemalloc/internal/private_symbols_jet.awk $@.nm > $@
+	rm -f $@.nm
 
 $(objroot)include/jemalloc/internal/private_namespace.gen.h: $(C_SYMS)
 	$(SHELL) $(srcroot)include/jemalloc/internal/private_namespace.sh $^ > $@
@@ -591,6 +603,11 @@ install_include:
 	echo "$(INSTALL) -m 644 $$h $(INCLUDEDIR)/jemalloc"; \
 	$(INSTALL) -m 644 $$h $(INCLUDEDIR)/jemalloc; \
 done
+	$(INSTALL) -d $(INCLUDEDIR)/msvc_compat
+	@for h in $(MSVC_COMPAT_HDRS); do \
+	echo "$(INSTALL) -m 644 $$h $(INCLUDEDIR)/msvc_compat"; \
+	$(INSTALL) -m 644 $$h $(INCLUDEDIR)/msvc_compat; \
+done
 
 install_lib_shared: $(DSOS)
 	$(INSTALL) -d $(LIBDIR)
@@ -649,6 +666,8 @@ uninstall_bin:
 uninstall_include:
 	$(RM) -v $(foreach h,$(notdir $(C_HDRS)),$(INCLUDEDIR)/jemalloc/$(h))
 	rmdir -v $(INCLUDEDIR)/jemalloc
+	$(RM) -v $(foreach h,$(notdir $(MSVC_COMPAT_HDRS)),$(INCLUDEDIR)/msvc_compat/$(h))
+	rmdir -v $(INCLUDEDIR)/msvc_compat
 
 uninstall_lib_shared:
 	$(RM) -v $(LIBDIR)/$(LIBJEMALLOC).$(SOREV)

@@ -184,12 +184,49 @@ malloc_mutex_is_locked(malloc_mutex_t *mutex) {
 	return atomic_load_b(&mutex->locked, ATOMIC_RELAXED);
 }
 
+/*
+ * Before full runtime init completes, some callers lock with tsdn == NULL.
+ * Keep this path independent of pthread mutex APIs.
+ */
+static inline bool
+malloc_mutex_preboot_trylock(malloc_mutex_t *mutex) {
+	return atomic_exchange_b(&mutex->locked, true, ATOMIC_ACQUIRE);
+}
+
+static inline void
+malloc_mutex_preboot_lock(malloc_mutex_t *mutex) {
+	while (malloc_mutex_preboot_trylock(mutex)) {
+	}
+}
+
+static inline void
+malloc_mutex_preboot_unlock(malloc_mutex_t *mutex) {
+	atomic_store_b(&mutex->locked, false, ATOMIC_RELEASE);
+}
+
+extern malloc_init_t malloc_init_state;
+
+static inline bool
+malloc_mutex_use_preboot_path(tsdn_t *tsdn) {
+	/*
+	 * Some post-init call sites intentionally pass tsdn == NULL.  They must
+	 * still use the normal mutex path; otherwise self-lock patterns can spin
+	 * forever with the preboot atomic lock.
+	 */
+	(void)tsdn;
+	return unlikely(malloc_init_state != malloc_init_initialized);
+}
+
 /* Trylock: return false if the lock is successfully acquired. */
 static inline bool
 malloc_mutex_trylock(tsdn_t *tsdn, malloc_mutex_t *mutex) {
 	witness_assert_not_owner(tsdn_witness_tsdp_get(tsdn), &mutex->witness);
 	if (isthreaded) {
-		if (malloc_mutex_trylock_final(mutex)) {
+		if (malloc_mutex_use_preboot_path(tsdn)) {
+			if (malloc_mutex_preboot_trylock(mutex)) {
+				return true;
+			}
+		} else if (malloc_mutex_trylock_final(mutex)) {
 			return true;
 		}
 		assert(malloc_mutex_is_locked(mutex));
@@ -228,7 +265,9 @@ static inline void
 malloc_mutex_lock(tsdn_t *tsdn, malloc_mutex_t *mutex) {
 	witness_assert_not_owner(tsdn_witness_tsdp_get(tsdn), &mutex->witness);
 	if (isthreaded) {
-		if (malloc_mutex_trylock_final(mutex)) {
+		if (malloc_mutex_use_preboot_path(tsdn)) {
+			malloc_mutex_preboot_lock(mutex);
+		} else if (malloc_mutex_trylock_final(mutex)) {
 			malloc_mutex_lock_slow(mutex);
 		}
 		assert(malloc_mutex_is_locked(mutex));
@@ -242,8 +281,12 @@ malloc_mutex_unlock(tsdn_t *tsdn, malloc_mutex_t *mutex) {
 	witness_unlock(tsdn_witness_tsdp_get(tsdn), &mutex->witness);
 	if (isthreaded) {
 		assert(malloc_mutex_is_locked(mutex));
-		atomic_store_b(&mutex->locked, false, ATOMIC_RELAXED);
-		MALLOC_MUTEX_UNLOCK(mutex);
+		if (malloc_mutex_use_preboot_path(tsdn)) {
+			malloc_mutex_preboot_unlock(mutex);
+		} else {
+			atomic_store_b(&mutex->locked, false, ATOMIC_RELAXED);
+			MALLOC_MUTEX_UNLOCK(mutex);
+		}
 	}
 }
 

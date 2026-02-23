@@ -108,9 +108,9 @@ any of the following arguments (not a definitive list) to 'configure':
 
 * `--with-install-suffix=<suffix>`
 
-    Append <suffix> to the base name of all installed files, such that multiple
+    Append `<suffix>` to the base name of all installed files, such that multiple
     versions of jemalloc can coexist in the same installation directory.  For
-    example, libjemalloc.so.0 becomes libjemalloc<suffix>.so.0.
+    example, `libjemalloc.so.0` becomes `libjemalloc<suffix>.so.0`.
 
 * `--with-malloc-conf=<malloc_conf>`
 

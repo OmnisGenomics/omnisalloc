@@ -2141,6 +2141,14 @@ background_thread_ctl(tsd_t *tsd, const size_t *mib,
 			ret = 0;
 			goto label_return;
 		}
+		if (newval && background_thread_tsan_disabled) {
+			if (!opt_suppress_conf_warnings) {
+				malloc_printf("<jemalloc>: option "
+				    "background_thread disabled under TSAN\n");
+			}
+			ret = EINVAL;
+			goto label_return;
+		}
 
 		background_thread_enabled_set(tsd_tsdn(tsd), newval);
 		if (newval) {

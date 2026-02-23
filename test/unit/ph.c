@@ -40,6 +40,11 @@ node_cmp_magic(const node_t *a, const node_t *b) {
 
 ph_gen(static, heap, node_t, link, node_cmp_magic);
 
+static int
+node_cmp_void(void *a, void *b) {
+	return node_cmp_magic((const node_t *)a, (const node_t *)b);
+}
+
 static node_t *
 node_next_get(const node_t *node) {
 	return phn_next_get((node_t *)node, offsetof(node_t, link));
@@ -363,10 +368,134 @@ TEST_BEGIN(test_ph_self_referential_aux) {
 }
 TEST_END
 
+TEST_BEGIN(test_ph_self_merge_guard) {
+	node_t node;
+
+	node.magic = NODE_MAGIC;
+	node.key = 1;
+	phn_link_init(&node, offsetof(node_t, link));
+
+	node_t *merged = (node_t *)phn_merge(&node, &node,
+	    offsetof(node_t, link), node_cmp_void);
+	expect_ptr_eq(merged, &node, "Self-merge should return input node");
+	expect_ptr_null(node_next_get(&node),
+	    "Self-merge should not create sibling link");
+	expect_ptr_null(node_prev_get(&node),
+	    "Self-merge should not create prev link");
+}
+TEST_END
+
+TEST_BEGIN(test_ph_self_referential_aux_pair_merge) {
+	heap_t heap;
+	node_t root;
+	node_t aux;
+
+	heap_new(&heap);
+	root.magic = NODE_MAGIC;
+	root.key = 1;
+	aux.magic = NODE_MAGIC;
+	aux.key = 2;
+	phn_link_init(&root, offsetof(node_t, link));
+	phn_link_init(&aux, offsetof(node_t, link));
+
+	heap.ph.root = &root;
+	phn_next_set(&root, &aux, offsetof(node_t, link));
+	phn_prev_set(&aux, &root, offsetof(node_t, link));
+	phn_next_set(&aux, &aux, offsetof(node_t, link));
+
+	bool done = ph_try_aux_merge_pair(&heap.ph, offsetof(node_t, link),
+	    node_cmp_void);
+	expect_true(done, "Corrupted aux self-link should stop pair merge");
+	expect_ptr_eq(node_next_get(&root), &aux,
+	    "Expected aux node preserved as singleton");
+	expect_ptr_null(node_next_get(&aux),
+	    "Aux singleton should not keep self-loop");
+	expect_ptr_eq(node_prev_get(&aux), &root,
+	    "Aux singleton should stay linked from root");
+}
+TEST_END
+
+TEST_BEGIN(test_ph_root_aux_self_loop_merge) {
+	heap_t heap;
+	node_t root;
+
+	heap_new(&heap);
+	root.magic = NODE_MAGIC;
+	root.key = 1;
+	phn_link_init(&root, offsetof(node_t, link));
+
+	heap.ph.root = &root;
+	phn_next_set(&root, &root, offsetof(node_t, link));
+	phn_prev_set(&root, &root, offsetof(node_t, link));
+
+	bool done = ph_try_aux_merge_pair(&heap.ph, offsetof(node_t, link),
+	    node_cmp_void);
+	expect_true(done, "Root self-loop should stop pair merge");
+	expect_ptr_null(node_next_get(&root),
+	    "Root self-loop should be cleared");
+}
+TEST_END
+
+TEST_BEGIN(test_ph_sibling_cycle_break) {
+	heap_t heap;
+	node_t root;
+	node_t n1;
+	node_t n2;
+	node_t n3;
+
+	heap_new(&heap);
+	root.magic = NODE_MAGIC;
+	root.key = 0;
+	n1.magic = NODE_MAGIC;
+	n1.key = 1;
+	n2.magic = NODE_MAGIC;
+	n2.key = 2;
+	n3.magic = NODE_MAGIC;
+	n3.key = 3;
+	phn_link_init(&root, offsetof(node_t, link));
+	phn_link_init(&n1, offsetof(node_t, link));
+	phn_link_init(&n2, offsetof(node_t, link));
+	phn_link_init(&n3, offsetof(node_t, link));
+
+	/*
+	 * Corrupted sibling list under root:
+	 * n1 -> n2 -> n3 -> n2
+	 */
+	heap.ph.root = &root;
+	phn_lchild_set(&root, &n1, offsetof(node_t, link));
+	phn_prev_set(&n1, &root, offsetof(node_t, link));
+	phn_next_set(&n1, &n2, offsetof(node_t, link));
+	phn_prev_set(&n2, &n1, offsetof(node_t, link));
+	phn_next_set(&n2, &n3, offsetof(node_t, link));
+	phn_prev_set(&n3, &n2, offsetof(node_t, link));
+	phn_next_set(&n3, &n2, offsetof(node_t, link));
+	phn_prev_set(&n2, &n3, offsetof(node_t, link));
+
+	node_t *child_heap = (node_t *)ph_merge_children(&root,
+	    offsetof(node_t, link), node_cmp_void);
+	expect_ptr_not_null(child_heap,
+	    "Expected merged child heap after cycle repair");
+	expect_ptr_null(node_next_get(child_heap),
+	    "Merged child heap root should have no sibling");
+
+	heap.ph.root = child_heap;
+	for (unsigned i = 0; i < 3; i++) {
+		node_t *removed = heap_remove_first(&heap);
+		expect_ptr_not_null(removed, "Expected node removal to succeed");
+	}
+	expect_true(heap_empty(&heap),
+	    "Expected heap to be empty after removing all child nodes");
+}
+TEST_END
+
 int
 main(void) {
 	return test(
 	    test_ph_empty,
 	    test_ph_random,
-	    test_ph_self_referential_aux);
+	    test_ph_self_referential_aux,
+	    test_ph_self_merge_guard,
+	    test_ph_self_referential_aux_pair_merge,
+	    test_ph_root_aux_self_loop_merge,
+	    test_ph_sibling_cycle_break);
 }

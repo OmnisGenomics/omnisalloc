@@ -584,7 +584,11 @@ extent_recycle_split(tsdn_t *tsdn, pac_t *pac, ehooks_t *ehooks,
 		 */
 		assert(result == extent_split_interior_error);
 		if (to_salvage != NULL) {
-			extent_deregister(tsdn, pac, to_salvage);
+			/*
+			 * The lead split succeeded, so this extent is still valid and
+			 * should remain recyclable.
+			 */
+			extent_deactivate_locked(tsdn, pac, ecache, to_salvage);
 		}
 		if (to_leak != NULL) {
 			extent_deregister_no_gdump_sub(tsdn, pac, to_leak);

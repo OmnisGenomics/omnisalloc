@@ -3,6 +3,8 @@
 
 #include "jemalloc/internal/assert.h"
 
+extern void __tsan_init(void) JEMALLOC_ATTR(weak);
+
 JEMALLOC_DIAGNOSTIC_DISABLE_SPURIOUS
 
 /******************************************************************************/
@@ -13,6 +15,7 @@ JEMALLOC_DIAGNOSTIC_DISABLE_SPURIOUS
 /* Read-only after initialization. */
 bool opt_background_thread = BACKGROUND_THREAD_DEFAULT;
 size_t opt_max_background_threads = MAX_BACKGROUND_THREAD_LIMIT + 1;
+bool background_thread_tsan_disabled = false;
 
 /* Used for thread creation, termination and stats. */
 malloc_mutex_t background_thread_lock;
@@ -119,7 +122,7 @@ set_current_thread_affinity(int cpu) {
 #if defined(JEMALLOC_HAVE_SCHED_SETAFFINITY) || defined(JEMALLOC_HAVE_PTHREAD_SETAFFINITY_NP)
 #if defined(JEMALLOC_HAVE_SCHED_SETAFFINITY)
 	cpu_set_t cpuset;
-#else
+#elif defined(JEMALLOC_HAVE_PTHREAD_SETAFFINITY_NP)
 #  ifndef __NetBSD__
 	cpuset_t cpuset;
 #  else
@@ -127,16 +130,20 @@ set_current_thread_affinity(int cpu) {
 #  endif
 #endif
 
+#if defined(JEMALLOC_HAVE_SCHED_SETAFFINITY) || defined(JEMALLOC_HAVE_PTHREAD_SETAFFINITY_NP)
 #ifndef __NetBSD__
 	CPU_ZERO(&cpuset);
 	CPU_SET(cpu, &cpuset);
 #else
 	cpuset = cpuset_create();
 #endif
+#else
+	return true;
+#endif
 
 #if defined(JEMALLOC_HAVE_SCHED_SETAFFINITY)
 	return (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) != 0);
-#else
+#elif defined(JEMALLOC_HAVE_PTHREAD_SETAFFINITY_NP)
 #  ifndef __NetBSD__
 	int ret = pthread_setaffinity_np(pthread_self(), sizeof(cpuset_t),
 	    &cpuset);
@@ -146,9 +153,11 @@ set_current_thread_affinity(int cpu) {
 	cpuset_destroy(cpuset);
 #  endif
 	return ret != 0;
+#else
+	return true;
 #endif
 #else
-        return false;
+	return false;
 #endif
 }
 
@@ -797,6 +806,16 @@ background_thread_ctl_init(tsdn_t *tsdn) {
 
 bool
 background_thread_boot0(void) {
+	if (&__tsan_init != NULL) {
+		background_thread_tsan_disabled = true;
+		if (opt_background_thread) {
+			if (!opt_suppress_conf_warnings) {
+				malloc_printf("<jemalloc>: option "
+				    "background_thread disabled under TSAN\n");
+			}
+			opt_background_thread = false;
+		}
+	}
 	if (!have_background_thread && opt_background_thread) {
 		if (!opt_suppress_conf_warnings) {
 			malloc_printf("<jemalloc>: option background_thread "
@@ -846,9 +865,14 @@ background_thread_boot1(tsdn_t *tsdn, base_t *base) {
 		    malloc_mutex_address_ordered)) {
 			return true;
 		}
-		if (pthread_cond_init(&info->cond, NULL)) {
-			return true;
-		}
+		/*
+		 * Avoid invoking pthread interceptors during allocator
+		 * bootstrap (e.g. sanitizer preload).  Default
+		 * initialization is equivalent to pthread_cond_init(...,
+		 * NULL) for these internal condition variables.
+		 */
+		pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+		info->cond = cond;
 		malloc_mutex_lock(tsdn, &info->mtx);
 		info->state = background_thread_stopped;
 		background_thread_info_init(tsdn, info);

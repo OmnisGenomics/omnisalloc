@@ -264,6 +264,26 @@ static const void (WINAPI *init_init_lock)(void) = _init_init_lock;
 static malloc_mutex_t	init_lock = MALLOC_MUTEX_INITIALIZER;
 #endif
 
+/*
+ * Synchronize the pre-TSD bootstrap path without calling pthread mutex APIs.
+ * Sanitizer runtimes may intercept those APIs before their own init is
+ * complete, which can recurse into the allocator and crash.
+ */
+static atomic_b_t	init_lock_preboot = ATOMIC_INIT(false);
+
+static void
+malloc_init_preboot_lock(void) {
+	spin_t spinner = SPIN_INITIALIZER;
+	while (atomic_exchange_b(&init_lock_preboot, true, ATOMIC_ACQUIRE)) {
+		spin_adaptive(&spinner);
+	}
+}
+
+static void
+malloc_init_preboot_unlock(void) {
+	atomic_store_b(&init_lock_preboot, false, ATOMIC_RELEASE);
+}
+
 typedef struct {
 	void	*p;	/* Input pointer (as in realloc(p, s)). */
 	size_t	s;	/* Request size. */
@@ -740,6 +760,28 @@ jemalloc_getenv(const char *name) {
 #endif
 }
 
+extern void __asan_init(void) JEMALLOC_ATTR(weak);
+extern void __tsan_init(void) JEMALLOC_ATTR(weak);
+
+bool
+malloc_conf_unsafe_bootstrap_runtime_present(void) {
+	return (&__asan_init != NULL) || (&__tsan_init != NULL);
+}
+
+static ssize_t
+jemalloc_readlink(const char *linkname, char *buf, size_t bufsize) {
+#if defined(JEMALLOC_USE_SYSCALL) && defined(SYS_readlinkat)
+	return (ssize_t)syscall(SYS_readlinkat, AT_FDCWD, linkname, buf,
+	    bufsize);
+#elif defined(JEMALLOC_USE_SYSCALL) && defined(SYS_readlink)
+	return (ssize_t)syscall(SYS_readlink, linkname, buf, bufsize);
+#elif defined(JEMALLOC_READLINKAT)
+	return readlinkat(AT_FDCWD, linkname, buf, bufsize);
+#else
+	return readlink(linkname, buf, bufsize);
+#endif
+}
+
 static unsigned
 malloc_ncpus(void) {
 	long result;
@@ -765,11 +807,23 @@ malloc_ncpus(void) {
 #  else
 		cpu_set_t set;
 #  endif
-#  if defined(JEMALLOC_HAVE_SCHED_SETAFFINITY)
-		sched_getaffinity(0, sizeof(set), &set);
+		bool affinity_ok = false;
+		CPU_ZERO(&set);
+#  if defined(JEMALLOC_USE_SYSCALL) && defined(SYS_sched_getaffinity)
+		affinity_ok =
+		    (syscall(SYS_sched_getaffinity, 0, sizeof(set), &set) >= 0);
+#  elif defined(JEMALLOC_HAVE_SCHED_SETAFFINITY)
+		affinity_ok = (sched_getaffinity(0, sizeof(set), &set) == 0);
+#  elif defined(JEMALLOC_HAVE_PTHREAD_GETAFFINITY_NP)
+		affinity_ok = (pthread_getaffinity_np(pthread_self(), sizeof(set),
+		    &set) == 0);
 #  else
-		pthread_getaffinity_np(pthread_self(), sizeof(set), &set);
+		affinity_ok = false;
 #  endif
+		if (!affinity_ok) {
+			CPU_ZERO(&set);
+			CPU_SET(0, &set);
+		}
 		result = CPU_COUNT(&set);
 	}
 #else
@@ -798,15 +852,27 @@ malloc_cpu_count_is_deterministic(void)
 	}
 #  if defined(CPU_COUNT)
 #    if defined(__FreeBSD__) || defined(__DragonFly__)
-	cpuset_t set;
+		cpuset_t set;
 #    else
-	cpu_set_t set;
+		cpu_set_t set;
 #    endif /* __FreeBSD__ */
-#    if defined(JEMALLOC_HAVE_SCHED_SETAFFINITY)
-	sched_getaffinity(0, sizeof(set), &set);
-#    else /* !JEMALLOC_HAVE_SCHED_SETAFFINITY */
-	pthread_getaffinity_np(pthread_self(), sizeof(set), &set);
-#    endif /* JEMALLOC_HAVE_SCHED_SETAFFINITY */
+		bool affinity_ok = false;
+		CPU_ZERO(&set);
+#    if defined(JEMALLOC_USE_SYSCALL) && defined(SYS_sched_getaffinity)
+		affinity_ok =
+		    (syscall(SYS_sched_getaffinity, 0, sizeof(set), &set) >= 0);
+#    elif defined(JEMALLOC_HAVE_SCHED_SETAFFINITY)
+		affinity_ok = (sched_getaffinity(0, sizeof(set), &set) == 0);
+#    elif defined(JEMALLOC_HAVE_PTHREAD_GETAFFINITY_NP)
+		affinity_ok = (pthread_getaffinity_np(pthread_self(), sizeof(set),
+		    &set) == 0);
+#    else
+		affinity_ok = false;
+#    endif
+		if (!affinity_ok) {
+			CPU_ZERO(&set);
+			CPU_SET(0, &set);
+		}
 	long cpu_affinity = CPU_COUNT(&set);
 	if (cpu_affinity != cpu_conf) {
 		return false;
@@ -1004,6 +1070,15 @@ obtain_malloc_conf(unsigned which_source, char readlink_buf[PATH_MAX + 1]) {
 		ret = NULL;
 		break;
 #else
+		/*
+		 * Sanitizer runtimes can allocate during loader bootstrap, before
+		 * their own interceptors are fully initialized.  Avoid filesystem
+		 * probing on this path.
+		 */
+		if (malloc_conf_unsafe_bootstrap_runtime_present()) {
+			ret = NULL;
+			break;
+		}
 		ssize_t linklen = 0;
 #  ifndef _WIN32
 		int saved_errno = errno;
@@ -1019,11 +1094,7 @@ obtain_malloc_conf(unsigned which_source, char readlink_buf[PATH_MAX + 1]) {
 		 * Try to use the contents of the "/etc/malloc.conf" symbolic
 		 * link's name.
 		 */
-#    ifndef JEMALLOC_READLINKAT
-		linklen = readlink(linkname, readlink_buf, PATH_MAX);
-#    else
-		linklen = readlinkat(AT_FDCWD, linkname, readlink_buf, PATH_MAX);
-#    endif
+		linklen = jemalloc_readlink(linkname, readlink_buf, PATH_MAX);
 		if (linklen == -1) {
 			/* No configuration specified. */
 			linklen = 0;
@@ -1874,9 +1945,9 @@ malloc_init_hard_needed(void) {
 		/* Busy-wait until the initializing thread completes. */
 		spin_t spinner = SPIN_INITIALIZER;
 		do {
-			malloc_mutex_unlock(TSDN_NULL, &init_lock);
+			malloc_init_preboot_unlock();
 			spin_adaptive(&spinner);
-			malloc_mutex_lock(TSDN_NULL, &init_lock);
+			malloc_init_preboot_lock();
 		} while (!malloc_initialized());
 		return false;
 	}
@@ -2016,9 +2087,9 @@ static bool
 malloc_init_hard_a0(void) {
 	bool ret;
 
-	malloc_mutex_lock(TSDN_NULL, &init_lock);
+	malloc_init_preboot_lock();
 	ret = malloc_init_hard_a0_locked();
-	malloc_mutex_unlock(TSDN_NULL, &init_lock);
+	malloc_init_preboot_unlock();
 	return ret;
 }
 
@@ -2191,10 +2262,6 @@ malloc_init_hard_finish(void) {
 	if (malloc_mutex_boot()) {
 		return true;
 	}
-
-	malloc_init_state = malloc_init_initialized;
-	malloc_slow_flag_init();
-
 	return false;
 }
 
@@ -2227,22 +2294,24 @@ malloc_init_hard(void) {
 #if defined(_WIN32) && _WIN32_WINNT < 0x0600
 	_init_init_lock();
 #endif
-	malloc_mutex_lock(TSDN_NULL, &init_lock);
+	malloc_init_preboot_lock();
 
 #define UNLOCK_RETURN(tsdn, ret, reentrancy)		\
 	malloc_init_hard_cleanup(tsdn, reentrancy);	\
 	return ret;
 
 	if (!malloc_init_hard_needed()) {
-		UNLOCK_RETURN(TSDN_NULL, false, false)
+		malloc_init_preboot_unlock();
+		return false;
 	}
 
 	if (malloc_init_state != malloc_init_a0_initialized &&
 	    malloc_init_hard_a0_locked()) {
-		UNLOCK_RETURN(TSDN_NULL, true, false)
+		malloc_init_preboot_unlock();
+		return true;
 	}
 
-	malloc_mutex_unlock(TSDN_NULL, &init_lock);
+	malloc_init_preboot_unlock();
 	/* Recursive allocation relies on functional tsd. */
 	tsd = malloc_tsd_boot0();
 	if (tsd == NULL) {
@@ -2285,6 +2354,8 @@ malloc_init_hard(void) {
 	}
 	post_reentrancy(tsd);
 	malloc_mutex_unlock(tsd_tsdn(tsd), &init_lock);
+	malloc_init_state = malloc_init_initialized;
+	malloc_slow_flag_init();
 
 	witness_assert_lockless(witness_tsd_tsdn(
 	    tsd_witness_tsdp_get_unsafe(tsd)));
