@@ -28,12 +28,32 @@
 /******************************************************************************/
 /* Data. */
 
+#ifdef _MSC_VER
+#  define JEMALLOC_STR(s) #s
+#  define JEMALLOC_XSTR(s) JEMALLOC_STR(s)
+#endif
+
 /* Runtime configuration options. */
+#ifndef _MSC_VER
 const char	*je_malloc_conf
 #ifndef _WIN32
     JEMALLOC_ATTR(weak)
 #endif
     ;
+#else
+extern const char	*je_malloc_conf;
+const char	*malloc_conf_default = NULL;
+#  if defined(_M_IX86)
+/*
+ * The JEMALLOC_PRIVATE_NAMESPACE does not get applied properly on 32-bit
+ * windows, presumably due to the leading underscore being automatically added
+ * to all symbols.
+ */
+#    pragma comment(linker, "/alternatename:_" JEMALLOC_XSTR(je_malloc_conf) "=_malloc_conf_default")
+#  else
+#    pragma comment(linker, "/alternatename:" JEMALLOC_XSTR(je_malloc_conf) "=" JEMALLOC_XSTR(JEMALLOC_PRIVATE_NAMESPACE) "malloc_conf_default")
+#  endif
+#endif
 /*
  * The usual rule is that the closer to runtime you are, the higher priority
  * your configuration settings are (so the jemalloc config options get lower
@@ -51,11 +71,26 @@ const char	*je_malloc_conf
  * We don't actually want this to be widespread, so we'll give it a silly name
  * and not mention it in headers or documentation.
  */
+#ifndef _MSC_VER
 const char	*je_malloc_conf_2_conf_harder
 #ifndef _WIN32
     JEMALLOC_ATTR(weak)
 #endif
     ;
+#else
+extern const char	*je_malloc_conf_2_conf_harder;
+const char	*malloc_conf_2_conf_harder_default = NULL;
+#  if defined(_M_IX86)
+/*
+ * The JEMALLOC_PRIVATE_NAMESPACE does not get applied properly on 32-bit
+ * windows, presumably due to the leading underscore being automatically added
+ * to all symbols.
+ */
+#    pragma comment(linker, "/alternatename:_" JEMALLOC_XSTR(je_malloc_conf_2_conf_harder) "=_malloc_conf_2_conf_harder_default")
+#  else
+#    pragma comment(linker, "/alternatename:" JEMALLOC_XSTR(je_malloc_conf_2_conf_harder) "=" JEMALLOC_XSTR(JEMALLOC_PRIVATE_NAMESPACE) "malloc_conf_2_conf_harder_default")
+#  endif
+#endif
 
 const char *opt_malloc_conf_symlink = NULL;
 const char *opt_malloc_conf_env_var = NULL;
