@@ -24,7 +24,12 @@ abs_srcroot := @abs_srcroot@
 abs_objroot := @abs_objroot@
 
 # Build parameters.
-CPPFLAGS := -I$(objroot)include -I$(srcroot)include @CPPFLAGS@
+#
+# Keep in-tree include paths separate so they stay first even when users
+# override CPPFLAGS at make invocation time.
+#
+LOCAL_CPPFLAGS := -I$(objroot)include -I$(srcroot)include
+CPPFLAGS := @CPPFLAGS@
 CONFIGURE_CFLAGS := @CONFIGURE_CFLAGS@
 SPECIFIED_CFLAGS := @SPECIFIED_CFLAGS@
 EXTRA_CFLAGS := @EXTRA_CFLAGS@
@@ -504,9 +509,9 @@ $(C_JET_OBJS) $(C_TESTLIB_UNIT_OBJS) $(C_TESTLIB_ANALYZE_OBJS) $(C_TESTLIB_STRES
 
 $(C_SYM_OBJS) $(C_OBJS) $(C_PIC_OBJS) $(C_JET_SYM_OBJS) $(C_JET_OBJS) $(C_TESTLIB_OBJS) $(TESTS_OBJS): %.$(O):
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $(CTARGET) $<
+	$(CC) $(LOCAL_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) -c $(CTARGET) $<
 ifdef CC_MM
-	@$(CC) -MM $(CPPFLAGS) $(CFLAGS) -MT $@ -o $(@:%.$(O)=%.d) $<
+	@$(CC) -MM $(LOCAL_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) -MT $@ -o $(@:%.$(O)=%.d) $<
 endif
 
 $(C_SYMS): %.sym:
@@ -534,9 +539,9 @@ $(objroot)include/jemalloc/internal/private_namespace_jet.gen.h: $(C_JET_SYMS)
 
 $(CPP_OBJS) $(CPP_PIC_OBJS) $(TESTS_CPP_OBJS): %.$(O):
 	@mkdir -p $(@D)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $(CTARGET) $<
+	$(CXX) $(LOCAL_CPPFLAGS) $(CPPFLAGS) $(CXXFLAGS) -c $(CTARGET) $<
 ifdef CC_MM
-	@$(CXX) -MM $(CPPFLAGS) $(CXXFLAGS) -MT $@ -o $(@:%.$(O)=%.d) $<
+	@$(CXX) -MM $(LOCAL_CPPFLAGS) $(CPPFLAGS) $(CXXFLAGS) -MT $@ -o $(@:%.$(O)=%.d) $<
 endif
 
 ifneq ($(SOREV),$(SO))
