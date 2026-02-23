@@ -453,22 +453,13 @@ case "${host_cpu}" in
 	;;
   aarch64|arm*)
 	HAVE_CPU_SPINWAIT=1
-	dnl On newer arm64 cores (e.g. ARMv9), sb is a lower-overhead option.
-	AC_CACHE_VAL([je_cv_sb],
-	  [JE_COMPILABLE([sb instruction], [],
-			[[__asm__ volatile("sb"); return 0;]],
-			[je_cv_sb])])
-	if test "x${je_cv_sb}" = "xyes" ; then
-	    CPU_SPINWAIT='__asm__ volatile("sb")'
-	else
-	    dnl Fallback for older architectures/toolchains.
-	    AC_CACHE_VAL([je_cv_isb],
-	      [JE_COMPILABLE([isb instruction], [],
-				[[__asm__ volatile("isb"); return 0;]],
-				[je_cv_isb])])
-	    if test "x${je_cv_isb}" = "xyes" ; then
-		CPU_SPINWAIT='__asm__ volatile("isb")'
-	    fi
+	dnl Use ISB as baseline; spin.h may choose SB at runtime when supported.
+	AC_CACHE_VAL([je_cv_isb],
+	  [JE_COMPILABLE([isb instruction], [],
+			[[__asm__ volatile("isb"); return 0;]],
+			[je_cv_isb])])
+	if test "x${je_cv_isb}" = "xyes" ; then
+	    CPU_SPINWAIT='__asm__ volatile("isb")'
 	fi
 	;;
   *)
